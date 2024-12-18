@@ -1,0 +1,4 @@
+{
+    "blacklist_coins": ["fakecoin1", "scamcoin2"],
+    "blacklist_devs": ["dev123", "maliciousdev456"]
+}
