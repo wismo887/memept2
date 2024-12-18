@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Filtro Memecoins</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .results {
+            margin-top: 20px;
+        }
+        .results div {
+            margin-bottom: 10px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .good {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .medium {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Filtro Memecoins</h1>
+        <button id="fetchData">Analizza e Filtra Memecoins</button>
+        <div class="results" id="results"></div>
+    </div>
+
+    <script>
+        let config = {};
+
+        // URL dei proxy per bypassare CORS
+        const PROXY_URL = "https://cors-anywhere.herokuapp.com/";
+        const ROCKET_UNIVERSE_API = PROXY_URL + "https://api.rocketuniverse.io";
+        const DEXSCREENER_API = PROXY_URL + "https://api.dexscreener.io/latest/dex/pairs";
+        const RUGCHECK_API = PROXY_URL + "https://rugcheck.xyz/api";
+        const TWEETSCOUT_API = PROXY_URL + "https://app.tweetscout.io/api/score";
+
+        // Caricamento config.json
+        async function loadConfig() {
+            try {
+                const response = await fetch("config.json");
+                if (!response.ok) throw new Error("Errore nel caricamento del file config.json");
+                config = await response.json();
+                console.log("Configurazione caricata:", config);
+            } catch (error) {
+                console.error("Impossibile caricare config.json:", error);
+            }
+        }
+
+        // Funzione principale
+        async function fetchMemecoins() {
+            try {
+                const resultsDiv = document.getElementById("results");
+                resultsDiv.innerHTML = "<p>Caricamento in corso...</p>";
+
+                await loadConfig();
+
+                // Fetch da Dexscreener
+                const dexData = await fetchApi(DEXSCREENER_API, "Dexscreener");
+                let filteredDexData = dexData.pairs.filter(pair => (
+                    pair.age <= 24 &&
+                    pair.transactions.last1h >= 150 &&
+                    pair.transactions.last5min >= 25
+                ));
+
+                // Verifica su Rugcheck, Rocket Universe e controllo social
+                filteredDexData = await Promise.all(filteredDexData.map(async (coin) => {
+                    const isRugcheckSafe = await checkRugcheck(coin.pairAddress);
+                    const isRocketUniverseValid = await checkRocketUniverse(coin.pairAddress);
+                    const socialScore = await checkTweetScout(coin.baseToken.name);
+
+                    const isBlacklisted = config.blacklist_coins.includes(coin.baseToken.name) || 
+                                          config.blacklist_devs.includes(coin.developer);
+
+                    const isSupplyBundled = coin.baseToken.supply > 1000000000;
+
+                    if (isRugcheckSafe && isRocketUniverseValid && !isBlacklisted && !isSupplyBundled) {
+                        return {
+                            ...coin,
+                            socialScore: socialScore
+                        };
+                    }
+                    return null;
+                }));
+
+                // Filtra i risultati non validi
+                const finalResults = filteredDexData.filter(coin => coin !== null);
+
+                // Mostra i risultati
+                displayResults(finalResults, resultsDiv);
+
+            } catch (error) {
+                console.error("Errore durante l'analisi:", error);
+                document.getElementById("results").innerHTML = "<p>Errore durante l'analisi. Controlla la console per maggiori dettagli.</p>";
+            }
+        }
+
+        // Funzione per verificare i token su Rugcheck
+        async function checkRugcheck(address) {
+            try {
+                const response = await fetch(`${RUGCHECK_API}/check/${address}`);
+                const data = await response.json();
+                return data.market === "good";
+            } catch (error) {
+                console.error("Errore Rugcheck:", error);
+                return false;
+            }
+        }
+
+        // Funzione per verificare su Rocket Universe
+        async function checkRocketUniverse(address) {
+            try {
+                const response = await fetch(`${ROCKET_UNIVERSE_API}/validate/${address}`);
+                const data = await response.json();
+                return data.isValid;
+            } catch (error) {
+                console.error("Errore Rocket Universe:", error);
+                return false;
+            }
+        }
+
+        // Funzione per controllare il punteggio social con TweetScout
+        async function checkTweetScout(name) {
+            try {
+                const response = await fetch(`${TWEETSCOUT_API}?token=${encodeURIComponent(name)}`);
+                const data = await response.json();
+                return data.score || 0;
+            } catch (error) {
+                console.error("Errore TweetScout:", error);
+                return 0;
+            }
+        }
+
+        // Funzione per richiamare API
+        async function fetchApi(url, source) {
+            try {
+                const response = await fetch(url);
+                if (!response.ok) throw new Error(`Errore API ${source}: ${response.status}`);
+                const data = await response.json();
+                console.log(`Dati da ${source}:`, data);
+                return data;
+            } catch (error) {
+                console.error(`Errore durante la richiesta API (${source}):`, error);
+                return { pairs: [] };
+            }
+        }
+
+        // Visualizzazione risultati
+        function displayResults(data, container) {
+            container.innerHTML = "";
+            if (data.length === 0) {
+                container.innerHTML = "<p>Nessun memecoin soddisfa i criteri.</p>";
+                return;
+            }
+
+            data.forEach(result => {
+                const div = document.createElement("div");
+                const score = result.socialScore;
+                const status = score > 450 ? "Buono" : "Medio";
+                div.className = score > 450 ? "good" : "medium";
+                div.textContent = `Nome: ${result.baseToken.name || "Sconosciuto"} - Stato Social: ${status} - Dettagli: ${JSON.stringify(result)}`;
+                container.appendChild(div);
+            });
+        }
+
+        document.getElementById("fetchData").addEventListener("click", fetchMemecoins);
+    </script>
+</body>
+</html>
